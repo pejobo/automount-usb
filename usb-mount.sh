@@ -9,8 +9,16 @@
 # This script is called from systemd unit file to mount or unmount
 # a USB drive.
 
+# Global mount options
+OPTS="rw,noatime,group,fmask=0117,dmask=0007"
+MOUNT_DIR="/media"
+GROUP_NAME="storage"
+
+###########################################################################
+
 PATH="$PATH:/usr/bin:/usr/local/bin:/usr/sbin:/usr/local/sbin:/bin:/sbin"
 log="logger -t usb-mount.sh -s "
+
 
 usage()
 {
@@ -33,9 +41,29 @@ DEV_LABEL=""
 
 do_mount()
 {
+    # Get group id for mount option
+    if [ "${GROUP_NAME}" ]; then
+        GROUP_ID=$(getent group storage | awk -F: '{printf "%d", $3}')
+        if [ "${GROUP_ID}" ]; then
+            OPTS+=",gid=${GROUP_ID}"
+        else
+            ${log} "Warning: Invalid group name ${GROUP_NAME}"
+            exit 1
+        fi
+    fi
+    
+    # Exit if already mounted
     if [[ -n ${MOUNT_POINT} ]]; then
         ${log} "Warning: ${DEVICE} is already mounted at ${MOUNT_POINT}"
         exit 1
+    fi
+    
+    # adapted/copied from https://github.com/Ferk/udev-media-automount/blob/master/media-automount
+    fstab=$(grep /etc/fstab -e "^[ \t]*${DEVICE}[ \t]")
+    # Don't manage devices that are already in fstab
+    if [ "$fstab" ]; then
+       ${log} "${DEVICE} already in /etc/fstab, skipping: ${fstab/[ \t][ \t]/ }"
+       exit 1
     fi
 
     # Get info for this drive: $ID_FS_LABEL and $ID_FS_TYPE
@@ -54,18 +82,15 @@ do_mount()
         DEV_LABEL="${DEVBASE}"
     fi
 
-    MOUNT_POINT="/media/${DEV_LABEL}"
+    MOUNT_POINT="${MOUNT_DIR}/${DEV_LABEL}"
 
     ${log} "Mount point: ${MOUNT_POINT}"
 
     mkdir -p ${MOUNT_POINT}
 
-    # Global mount options
-    OPTS="rw,relatime"
-
     # File system type specific mount options
     if [[ ${ID_FS_TYPE} == "vfat" ]]; then
-        OPTS+=",users,gid=100,umask=000,shortname=mixed,utf8=1,flush"
+        OPTS+=",users,shortname=mixed,utf8=1,flush"
     fi
 
     if ! mount -o ${OPTS} ${DEVICE} ${MOUNT_POINT}; then
